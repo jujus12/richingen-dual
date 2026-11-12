@@ -1,0 +1,669 @@
+package com.example.w0wingen
+
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Bundle
+import android.provider.Settings
+import android.text.InputType
+import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Switch
+import android.widget.TextView
+import android.widget.Toast
+
+/** Ayar ekranı: sayısal değerler, açık/kapalı seçenekler ve harita listesi burada girilir. */
+class MainActivity : Activity() {
+
+    private class Field(val key: String, val label: String, val hint: String, val def: String, val decimal: Boolean = false, val text: Boolean = false)
+
+    private val autoFields = listOf(
+        Field("myName", "Karakter adın", "Sahip kontrolü açıkken boss çubuğundaki ad bu değilse (başkası saldırıyorsa) boss bırakılır", "yxesky", false, true),
+        Field("leadSec", "Bossa gitme payı", "Süresi bu kadar saniye kalınca (ya da geçmişse) bossa gidilir", "20"),
+        Field("fightTimeout", "Savaş zaman aşımı", "Bir boss için en fazla bekleme (sn)", "300"),
+        Field("deathLimit", "Ölüm sınırı", "Aynı bossta bu kadar ölünce o boss atlanıp farma dönülür", "3"),
+        Field("deathBlockMin", "Atlama süresi", "Ölüm sınırına ulaşan boss bu kadar dakika atlanır (dk)", "15"),
+        Field("stuckMin", "Takılma bekçisi", "Bot bu kadar dakika hiçbir şey yapmazsa telefona bildirim gider ve kurtarma denenir (0 = kapalı)", "10")
+    )
+
+    private val farmFields = listOf(
+        Field("farmWire", "Farm wire'ı", "Farma giderken önce bu wire'a geçilir", "3"),
+        Field("farmWait", "Farm konumuna varış bekleme", "Bağlantıya dokunduktan bu kadar sn sonra oto atak ve kalkan (sn)", "10"),
+        Field("idleFarmMin", "Boşta farm: kaç dk kesim yoksa", "Otomasyon bu kadar dakika hiçbir şey kesmezse PM'deki farm konumuna gidip farm yapılır (dk, 0 = kapalı)", "10"),
+        Field("idleFarmStay", "Boşta farm: kaç dk kalsın", "Farma gidince en az bu kadar dakika orada kalınır, sonra rota/golden/red tekrar denenir (dk). Süresi gelen boss yine öne geçer", "10")
+    )
+
+    private val moveFields = listOf(
+        Field("radius", "Random yarıçapı", "Oyuncu boss noktasına bu kadar yaklaşınca Random bırakılıp yürünür (piksel, 0 = Random kapalı)", "200"),
+        Field("randomWait", "Random sonrası bekleme", "Işınlanma yüklenirken beklenecek süre (sn)", "2.5", true),
+        Field("randomMax", "En fazla Random", "Bu kadar denemede yaklaşılamazsa yürümeye geçilir", "40"),
+        Field("arrive", "Varış mesafesi", "İmleç kayıtlı noktaya bu kadar yaklaşınca harita kapanır (piksel)", "45"),
+        Field("walkTimeout", "Varış zaman aşımı", "Noktaya bu sürede varılamazsa vazgeçilir (sn)", "90"),
+        Field("mapTravel", "Haritaya ışınlanma bekleme", "PM'deki bağlantıya tıkladıktan sonra yüklenme (sn)", "10"),
+        Field("switchWait", "Wire değişimi bekleme", "Wire seçildikten sonra yüklenme (sn)", "6"),
+        Field("sameBossPx", "Aynı boss say", "Aynı harita ve wire'da kayıtlı noktaya bu kadar yakın kayıt aynı boss sayılır (piksel)", "90")
+    )
+
+    private val buffFields = listOf(
+        Field("minAtk", "Minimum ATK", "ATK ve DEF ikisi de altındaysa buff'a gidilir", "0"),
+        Field("minDef", "Minimum DEF", "", "0"),
+        Field("buffWire", "Buff wire'ı", "Buff'a giderken önce bu wire'a geçilir", "3"),
+        Field("buffTravel", "Buff yürüme süresi", "Buff noktasına varmak için bekleme (sn)", "12"),
+        Field("buffWait", "Buff bekleme sınırı", "Buff'ın gelmesini en fazla bu kadar bekle (sn)", "90")
+    )
+
+    private val shopFields = listOf(
+        Field("potMin", "Pot eşiği", "HP veya MP pot sayısı bunun altına inerse alışverişe gidilir", "20"),
+        Field("clickGap", "Tık aralığı", "Pot ve Recycle adımları arasındaki bekleme (sn). Oyundaki panelden de değişir", "1.0", true),
+        Field("potClicks", "Pot alma tık sayısı", "Eksik olan pot için Purchase düğmesine bu kadar basılır (her basış 99 adet)", "3"),
+        Field("potWatchSec", "Pot okuma sıklığı", "Pot sayısı OCR ile okunur, eşiğin altındaysa kayıtlı işlemle (yoksa eski yöntemle) alınır. Farmda ve her kesim başında bu kadar saniyede bir bakılır (sn, 60 = dakikada bir)", "60"),
+        Field("recycleKillEvery", "Her kaç kesimde bir Recycle", "Boss/golden/red/rota kesimi her başladığında sayılır; bu sayıya ulaşınca Recycle yapılır (0 = kapalı). Recycle açıkken yapılır", "0"),
+        Field("recycleEvery", "Recycle aralığı", "Otomasyon açıkken bu kadar dakikada bir Recycle yapılır (dk). Pot kapalı olsa da çalışır", "20")
+    )
+
+    private val redFields = listOf(
+        Field("redRetry", "Red boss yeniden bakma", "Haritada hiç canlı red boss görünmezse bu kadar saniye sonra tekrar bakılır (sn)", "15")
+    )
+
+    private val routeFields = listOf<Field>()
+
+    private val goldFields = listOf(
+        Field("goldWire", "Golden wire", "Golden kesilecek wire (farm ve buff gibi önce bu wire'a geçilir)", "3"),
+        Field("goldRetry", "Golden yeniden bakma", "Haritada hiç canlı golden görünmezse bu kadar saniye sonra tekrar bakılır; bu arada farm/bekleme (sn)", "15")
+    )
+
+    private var BG = 0xFF0F1115.toInt()
+    private var CARD = 0xFF1B1F2A.toInt()
+    private var INPUT = 0xFF262B3A.toInt()
+    private var ACCENT = 0xFF4FC3F7.toInt()
+    private val DIM = 0xFF9AA3B5.toInt()
+
+    private val inputs = HashMap<String, EditText>()
+    private lateinit var mapsEdit: EditText
+    private lateinit var ntfyEdit: EditText
+    private lateinit var randomOn: Switch
+    private lateinit var farmOn: Switch
+    private lateinit var goldOn: Switch
+    private lateinit var redOn: Switch
+    private lateinit var routeOn: Switch
+    private lateinit var idleFarmOn: Switch
+    private lateinit var impOn: Switch
+    private lateinit var angelOn: Switch
+    private lateinit var reviveOn: Switch
+    private lateinit var buffOn: Switch
+    private lateinit var potOn: Switch
+    private lateinit var recycleOn: Switch
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun rounded(color: Int, r: Int): GradientDrawable {
+        val g = GradientDrawable()
+        g.setColor(color)
+        g.cornerRadius = dp(r).toFloat()
+        return g
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val prevH = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { th, ex ->
+            try {
+                val t0 = java.text.SimpleDateFormat("dd.MM HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+                prefs().edit().putString("lastCrash", t0 + " · uygulama ekranı çöktü\n" + ex.stackTraceToString().take(2500)).commit()
+            } catch (e: Exception) {
+            }
+            if (prevH != null) prevH.uncaughtException(th, ex)
+        }
+        val th = TimerService.THEMES[TimerService.themeIdx(prefs())]
+        ACCENT = th[0]
+        BG = th[4]
+        CARD = th[2]
+        INPUT = th[5]
+
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(16), dp(24), dp(16), dp(24))
+
+        val gem = TextView(this)
+        gem.text = "◆"
+        gem.textSize = 16f
+        gem.gravity = Gravity.CENTER
+        gem.setTextColor(0xFFA03CF0.toInt())
+        col.addView(gem)
+        val title = TextView(this)
+        title.text = "RICHINGEN"
+        title.textSize = 30f
+        title.letterSpacing = 0.14f
+        title.gravity = Gravity.CENTER
+        title.typeface = Typeface.SERIF
+        title.setTextColor(0xFFC9ADEB.toInt())
+        col.addView(title)
+        val sub = TextView(this)
+        sub.text = "MU Immortal · boss takibi ve otomasyon"
+        sub.textSize = 13f
+        sub.gravity = Gravity.CENTER
+        sub.setTextColor(DIM)
+        sub.setPadding(0, dp(2), 0, dp(14))
+        col.addView(sub)
+
+        val profCard = card(col, "Profiller")
+        val profHint = TextView(this)
+        profHint.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Merkez sekmesinden profiller arasında geçebilirsin. Profil (plan) tüm ayarları içerir: düğmeler, sayılar, işaret noktaları, kayıtlı işlemler, pencere kayıtları, rota/golden/red listeleri. Bildirim konusu, harita listesi, tema ve pencere konumları dahil değildir. Oyunda Merkez > plan başlat düğmesi ya da ntfy: plan <ad>."
+        profHint.textSize = 11f
+        profHint.setTextColor(DIM)
+        profCard.addView(profHint)
+        profName = EditText(this)
+        profName.hint = "Profil adı (örn. Boss gecesi)"
+        profName.setTextColor(Color.WHITE)
+        profName.setHintTextColor(DIM)
+        profName.setSingleLine(true)
+        profCard.addView(profName, lp(dp(8)))
+        val ps = button("Mevcut ayarları profil olarak kaydet", true)
+        ps.setOnClickListener {
+            writeSettings()
+            val n = TimerService.saveProfile(prefs(), profName.text.toString())
+            if (n.isEmpty()) {
+                Toast.makeText(this, "Önce bir ad yaz", Toast.LENGTH_SHORT).show()
+            } else {
+                profName.setText("")
+                Toast.makeText(this, "Profil kaydedildi: " + n, Toast.LENGTH_SHORT).show()
+                renderProfiles()
+            }
+        }
+        profCard.addView(ps, lp(dp(8)))
+        profBox = LinearLayout(this)
+        profBox.orientation = LinearLayout.VERTICAL
+        profCard.addView(profBox, lp(dp(8)))
+        renderProfiles()
+
+        val setup = card(col, "Kurulum")
+        val steps = TextView(this)
+        steps.textSize = 13f
+        steps.setTextColor(Color.WHITE)
+        steps.setLineSpacing(dp(3).toFloat(), 1f)
+        steps.text = "1  Erişilebilirlik ayarlarından W0wingen'i aç.\n" +
+            "    Açılmıyorsa: Uygulama bilgisi > ⋮ > Kısıtlı ayarlara izin ver.\n" +
+            "2  Shizuku'yu başlat, oyunda panelden Araçlar > Shizuku ile izin ver.\n" +
+            "3  Aşağıdaki değerleri ve harita listesini kaydet.\n" +
+            "4  Oyunda sağ kenardaki tutamaca dokun, Araçlar > Ayar ile noktaları işaretle, Test ile okumayı dene.\n" +
+            "5  Boss kesince Kaydet, hazır olunca Otomasyon."
+        setup.addView(steps)
+        val acc = button("Erişilebilirlik ayarlarını aç", false)
+        acc.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        setup.addView(acc, lp(dp(10)))
+
+        val mapsCard = card(col, "Haritalar")
+        val mh = TextView(this)
+        mh.text = "Her satır: harita adı;wire sayısı. Ad, mini haritada yazdığı gibi olmalı (Raklion'lar 3 wire, diğerleri 1)."
+        mh.textSize = 11f
+        mh.setTextColor(DIM)
+        mapsCard.addView(mh)
+        mapsEdit = EditText(this)
+        mapsEdit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        var mapsRaw = prefs().getString("cfg_maps", TimerService.DEFAULT_MAPS)!!
+        mapsRaw = mapsRaw.replace("Swamp of Peace;1", "Swamp of Peace;3")
+        if (!mapsRaw.lowercase().contains("vip domain 5")) mapsRaw = mapsRaw.trimEnd() + "\nVIP Domain 5;1"
+        if (!prefs().getBoolean("vip234Added", false)) {
+            for (n in listOf("2", "3", "4")) {
+                if (!mapsRaw.lowercase().contains("vip domain " + n)) mapsRaw = mapsRaw.trimEnd() + "\nVIP Domain " + n + ";1"
+            }
+        }
+        if (!prefs().getBoolean("aidaIcarusAdded", false)) {
+            for (n in listOf("Aida 1", "Aida 2", "Icarus 1", "Icarus 3")) {
+                if (!mapsRaw.lowercase().contains(n.lowercase())) mapsRaw = mapsRaw.trimEnd() + "\n" + n + ";3"
+            }
+        }
+        if (!prefs().getBoolean("aidaIcarus3", false)) {
+            for (n in listOf("Aida 1", "Aida 2", "Icarus 1", "Icarus 3")) mapsRaw = mapsRaw.replace(n + ";1", n + ";3")
+        }
+        if (!prefs().getBoolean("kanturuAdded", false)) {
+            for (n in listOf("Kanturu Ruins 1", "Kanturu Ruins 2", "Kanturu Relics 1", "Kanturu Relics 2")) {
+                if (!mapsRaw.lowercase().contains(n.lowercase())) mapsRaw = mapsRaw.trimEnd() + "\n" + n + ";3"
+            }
+        }
+        if (!prefs().getBoolean("superbAdded", false)) {
+            for (n in listOf("Superb Realm 2", "Superb Realm 3")) {
+                if (!mapsRaw.lowercase().contains(n.lowercase())) mapsRaw = mapsRaw.trimEnd() + "\n" + n + ";1"
+            }
+        }
+        if (!mapsRaw.lowercase().contains("swamp of peace")) mapsRaw = mapsRaw.trimEnd() + "\nSwamp of Peace;3"
+        mapsEdit.setText(mapsRaw)
+        mapsEdit.setTextColor(Color.WHITE)
+        mapsEdit.textSize = 13f
+        mapsEdit.background = rounded(INPUT, 10)
+        mapsEdit.setPadding(dp(10), dp(8), dp(10), dp(8))
+        mapsEdit.minLines = 6
+        mapsEdit.gravity = Gravity.TOP
+        mapsCard.addView(mapsEdit, lp(dp(8)))
+
+        val auto = card(col, "Otomasyon")
+        for (f in autoFields) addField(auto, f)
+
+        val ph = card(col, "Telefon bildirimi")
+        val phHint = TextView(this)
+        phHint.text = "Telefonuna ücretsiz 'ntfy' uygulamasını kur, bu konu adına abone ol. Bildirimler (oyundan atılma, ölüm, boss kesildi, otomasyon durdu) oraya gelir. " +
+            "Telefondan aynı konuya 'durum', 'log' veya 'ekran' yazarsan tablet cevap verir (15 sn içinde). Konu adını kimseyle paylaşma; boş bırakırsan bildirim kapanır."
+        phHint.textSize = 11f
+        phHint.setTextColor(DIM)
+        ph.addView(phHint)
+        if (!prefs().contains("cfg_ntfy")) {
+            val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+            val rnd = java.util.Random()
+            val sbn = StringBuilder("richingen-")
+            for (i in 0 until 10) sbn.append(chars[rnd.nextInt(chars.length)])
+            prefs().edit().putString("cfg_ntfy", sbn.toString()).apply()
+        }
+        ntfyEdit = EditText(this)
+        ntfyEdit.setText(prefs().getString("cfg_ntfy", ""))
+        ntfyEdit.setTextColor(Color.WHITE)
+        ntfyEdit.textSize = 14f
+        ntfyEdit.setSingleLine(true)
+        ntfyEdit.background = rounded(INPUT, 10)
+        ntfyEdit.setPadding(dp(10), dp(8), dp(10), dp(8))
+        ph.addView(ntfyEdit, lp(dp(8)))
+
+        val pn = card(col, "Pencere (bölünmüş ekran)")
+        val pnHint = TextView(this)
+        pnHint.text = "Bu kopya ekranın hangi yarısında çalışsın? Bot yalnızca seçilen yarıyı okur, orada dokunur ve panelini orada gösterir. Diğer yarı için orijinal Richingen'i ya da başka bir kopyayı karşı yarıya ayarla."
+        pnHint.textSize = 11f
+        pnHint.setTextColor(DIM)
+        pn.addView(pnHint)
+        val paneRow = LinearLayout(this)
+        paneRow.orientation = LinearLayout.HORIZONTAL
+        val paneBtns = ArrayList<Button>()
+        fun paintPane() {
+            val cur = prefs().getInt("pane", 2)
+            for ((i, b) in paneBtns.withIndex()) {
+                b.background = rounded(if (i == cur) ACCENT else INPUT, 10)
+                b.setTextColor(if (i == cur) 0xFF04202D.toInt() else Color.WHITE)
+            }
+        }
+        for ((i, nm) in listOf("Tam ekran", "Sol yarı", "Sağ yarı").withIndex()) {
+            val b = Button(this)
+            b.text = nm
+            b.isAllCaps = false
+            b.setOnClickListener {
+                prefs().edit().putInt("pane", i).apply()
+                paintPane()
+            }
+            paneBtns.add(b)
+            paneRow.addView(b, LinearLayout.LayoutParams(0, dp(44), 1f).also { it.leftMargin = dp(if (i > 0) 6 else 0) })
+        }
+        paintPane()
+        pn.addView(paneRow, lp(dp(8)))
+
+        val look = card(col, "Görünüm")
+        val lookHint = TextView(this)
+        lookHint.text = "Oyun üstündeki panelin düzeni. Klasik: dar panel, üstte sekmeler. Konsol: geniş panel, solda simge rayı. Akış: büyük başlat düğmesi ve geri düğmeli sayfalar. Vitrin: altta simgeli gezinme çubuğu. Zirve: yuvarlak başlık ve kaydırılabilir hap sekmeler. Panelin başlığındaki ⇄ ile klasiğe dönebilirsin."
+        lookHint.textSize = 11f
+        lookHint.setTextColor(DIM)
+        look.addView(lookHint)
+        val styleRow = LinearLayout(this)
+        styleRow.orientation = LinearLayout.VERTICAL
+        val styleBtns = ArrayList<Button>()
+        fun paintStyle() {
+            val cur = prefs().getInt("uiStyle", 0)
+            for ((i, b) in styleBtns.withIndex()) {
+                b.background = rounded(if (i == cur) ACCENT else INPUT, 10)
+                b.setTextColor(if (i == cur) 0xFF04202D.toInt() else Color.WHITE)
+            }
+        }
+        val styleNames = listOf("Klasik", "Konsol", "Akış", "Vitrin", "Zirve", "Kusursuz")
+        for (rowIdx in 0 until 2) {
+            val rl = LinearLayout(this)
+            rl.orientation = LinearLayout.HORIZONTAL
+            for (c in 0 until 3) {
+                val i = rowIdx * 3 + c
+                val b = Button(this)
+                b.text = styleNames[i]
+                b.isAllCaps = false
+                b.setOnClickListener {
+                    prefs().edit().putInt("uiStyle", i).apply()
+                    paintStyle()
+                }
+                styleBtns.add(b)
+                rl.addView(b, LinearLayout.LayoutParams(0, dp(44), 1f).also { it.leftMargin = dp(if (c > 0) 6 else 0) })
+            }
+            styleRow.addView(rl, lp(dp(if (rowIdx > 0) 6 else 0)))
+        }
+        paintStyle()
+        look.addView(styleRow, lp(dp(8)))
+
+        val crash = card(col, "Son hata kaydı")
+        val crashTxt = TextView(this)
+        val lc = prefs().getString("lastCrash", "") ?: ""
+        crashTxt.text = if (lc.isEmpty()) "Kayıtlı hata yok." else lc
+        crashTxt.textSize = 10.5f
+        crashTxt.setTextColor(if (lc.isEmpty()) DIM else Color.WHITE)
+        crashTxt.setTextIsSelectable(true)
+        crash.addView(crashTxt)
+        if (lc.isNotEmpty()) {
+            val clr = button("Temizle", false)
+            clr.setOnClickListener {
+                prefs().edit().remove("lastCrash").apply()
+                crashTxt.text = "Kayıtlı hata yok."
+            }
+            crash.addView(clr, lp(dp(8)))
+        }
+
+        val lg = card(col, "Günlük (kayıt listesi)")
+        val lgHint = TextView(this)
+        lgHint.text = "Botun olayları, durum mesajları ve hataları; en yeni en üstte. Bir sorun olunca buradaki satırları bana gönder."
+        lgHint.textSize = 11f
+        lgHint.setTextColor(DIM)
+        lg.addView(lgHint)
+        val logTxt = TextView(this)
+        logTxt.typeface = Typeface.MONOSPACE
+        logTxt.textSize = 10.5f
+        logTxt.setTextColor(Color.WHITE)
+        logTxt.setTextIsSelectable(true)
+        fun loadLog(): String {
+            val f = java.io.File(filesDir, "richingen.log")
+            val lines = try { if (f.exists()) f.readLines() else emptyList() } catch (e: Exception) { emptyList() }
+            val tail = lines.takeLast(250).reversed()
+            val t = if (tail.isEmpty()) "Kayıt yok." else tail.joinToString("\n")
+            logTxt.text = t
+            return t
+        }
+        loadLog()
+        val logSv = ScrollView(this)
+        logSv.addView(logTxt)
+        logSv.setOnTouchListener { v, _ ->
+            v.parent.requestDisallowInterceptTouchEvent(true)
+            false
+        }
+        logSv.background = rounded(INPUT, 10)
+        logSv.setPadding(dp(8), dp(8), dp(8), dp(8))
+        lg.addView(logSv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340)).also { it.topMargin = dp(8) })
+        val logRow = LinearLayout(this)
+        logRow.orientation = LinearLayout.HORIZONTAL
+        val b1 = button("Yenile", false)
+        b1.setOnClickListener { loadLog() }
+        logRow.addView(b1, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val b2 = button("Paylaş", false)
+        b2.setOnClickListener {
+            val it2 = Intent(Intent.ACTION_SEND)
+            it2.type = "text/plain"
+            it2.putExtra(Intent.EXTRA_TEXT, loadLog().take(60000))
+            startActivity(Intent.createChooser(it2, "Günlüğü paylaş"))
+        }
+        logRow.addView(b2, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also { it.leftMargin = dp(6) })
+        val b3 = button("Temizle", false)
+        b3.setOnClickListener {
+            try {
+                java.io.File(filesDir, "richingen.log").delete()
+            } catch (e: Exception) {
+            }
+            loadLog()
+        }
+        logRow.addView(b3, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also { it.leftMargin = dp(6) })
+        lg.addView(logRow, lp(dp(8)))
+
+        val nc = card(col, "ntfy komutları")
+        val ncHint = TextView(this)
+        ncHint.text = "Kendi kısayol komutlarını yaz: her satıra  komut = eylem  biçiminde. Eylem aşağıdaki hazır komutlardan biri olur; birkaçını ; ile art arda yazabilirsin.\n" +
+            "Örnek:  sabah = plan Golden\n          gece = durdur ; plan Gece\n          gold = aç golden\n\n" +
+            "Hazır komutlar: durum · log · ekran · planlar · plan <ad> (yükle ve başlat) · profil <ad> (sadece yükle) · başlat [ad] · durdur · seçenekler · aç <seçenek> · kapat <seçenek> · reddet · iptal"
+        ncHint.textSize = 11f
+        ncHint.setTextColor(DIM)
+        nc.addView(ncHint)
+        cmdEdit = EditText(this)
+        cmdEdit.setText(prefs().getString("ntfyCmds", ""))
+        cmdEdit.setTextColor(Color.WHITE)
+        cmdEdit.textSize = 13f
+        cmdEdit.minLines = 4
+        cmdEdit.gravity = Gravity.TOP or Gravity.START
+        cmdEdit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        cmdEdit.background = rounded(INPUT, 10)
+        cmdEdit.setPadding(dp(10), dp(8), dp(10), dp(8))
+        nc.addView(cmdEdit, lp(dp(8)))
+
+        val farm = card(col, "Farm")
+        farmOn = sw(farm, "Boss yokken farm konumuna git", "cfg_farmOn", true)
+        idleFarmOn = sw(farm, "Boşta farm: belirlenen süre hiçbir şey kesilmezse farm konumuna git (rota/golden/red açıkken de çalışır)", "cfg_idleFarmOn", false)
+        for (f in farmFields) addField(farm, f)
+        impOn = sw(farm, "Farmda Imp düğmesine bas", "cfg_impOn", true)
+        angelOn = sw(farm, "Boss keserken Angel düğmesine bas", "cfg_angelOn", true)
+        reviveOn = sw(farm, "Ölünce Free Revival'a bas ve kaldığı işe dön", "cfg_reviveOn", true)
+
+        val move = card(col, "Işınlanma ve yürüme")
+        randomOn = sw(move, "Random ışınlanma açık (boss, golden, red ve rota için tek ayar)", "cfg_randomOn", true)
+        for (f in moveFields) addField(move, f)
+
+        val rt = card(col, "Rota")
+        routeOn = sw(rt, "Rota açık: rotadaki haritaları sırayla gez, her haritanın tüm wire'larında canlı bossları kes (açıkken golden/red/farm çalışmaz; rotayı oyunda İşaret sekmesi > Rota listesi'nden kur)", "cfg_routeOn", false)
+        for (f in routeFields) addField(rt, f)
+
+        val gold = card(col, "Golden canavarlar")
+        goldOn = sw(gold, "Boss yokken işaretli golden'ları kes (farm yerine; ikisini birlikte açma)", "cfg_goldOn", false)
+        for (f in goldFields) addField(gold, f)
+
+        val red = card(col, "Red bosslar (VIP Domain; süre kaydedilmez)")
+        redOn = sw(red, "Boss yokken işaretli red bossları kes (Oto sekmesindeki düğmeyle de açılır)", "cfg_redOn", false)
+        for (f in redFields) addField(red, f)
+
+        val buff = card(col, "Buff")
+        buffOn = sw(buff, "Buff alma açık", "cfg_buffOn", false)
+        for (f in buffFields) addField(buff, f)
+
+        val shop = card(col, "Pot ve Recycle")
+        potOn = sw(shop, "Pot alma açık", "cfg_potOn", true)
+        for (k in listOf("potMin", "potClicks", "potWatchSec")) addField(shop, shopFields.first { it.key == k })
+        recycleOn = sw(shop, "Recycle açık (pot kapalı olsa da çalışır)", "cfg_recycleOn", true)
+        for (k in listOf("recycleKillEvery", "recycleEvery", "clickGap")) addField(shop, shopFields.first { it.key == k })
+
+        val save = button("Kaydet", true)
+        save.setOnClickListener {
+            writeSettings()
+            Toast.makeText(this, "Kaydedildi (oyundaki 'Ayar' menüsünü yeniden aç)", Toast.LENGTH_SHORT).show()
+        }
+
+
+        val sv = ScrollView(this)
+        sv.setBackgroundColor(BG)
+        sv.addView(col)
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setBackgroundColor(BG)
+        root.addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val bar = LinearLayout(this)
+        bar.setBackgroundColor(CARD)
+        bar.setPadding(dp(16), dp(8), dp(16), dp(8))
+        bar.addView(save, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        setContentView(root)
+    }
+
+    private fun writeSettings() {
+            val e = prefs().edit()
+            val all = autoFields + farmFields + moveFields + goldFields + redFields + routeFields + buffFields + shopFields
+            for ((k, et) in inputs) {
+                val f = all.first { it.key == k }
+                val raw = et.text.toString().trim()
+                e.putString("cfg_" + k, if (raw.isEmpty()) f.def else raw)
+            }
+            e.putBoolean("cfg_randomOn", randomOn.isChecked)
+            e.putBoolean("cfg_farmOn", farmOn.isChecked)
+            e.putBoolean("cfg_goldOn", goldOn.isChecked)
+            e.putBoolean("cfg_redOn", redOn.isChecked)
+            e.putBoolean("cfg_routeOn", routeOn.isChecked)
+            e.putBoolean("cfg_idleFarmOn", idleFarmOn.isChecked)
+            e.putBoolean("cfg_impOn", impOn.isChecked)
+            e.putBoolean("cfg_angelOn", angelOn.isChecked)
+            e.putBoolean("cfg_reviveOn", reviveOn.isChecked)
+            e.putBoolean("cfg_buffOn", buffOn.isChecked)
+            e.putBoolean("cfg_potOn", potOn.isChecked)
+            e.putBoolean("cfg_recycleOn", recycleOn.isChecked)
+            e.putString("ntfyCmds", cmdEdit.text.toString().trim())
+            e.putString("cfg_ntfy", ntfyEdit.text.toString().trim().replace(Regex("[^A-Za-z0-9_-]"), ""))
+            val m = mapsEdit.text.toString().trim()
+            e.putString("cfg_maps", if (m.isEmpty()) TimerService.DEFAULT_MAPS else m)
+            e.apply()
+    }
+
+    private lateinit var cmdEdit: EditText
+    private lateinit var profBox: LinearLayout
+    private lateinit var profName: EditText
+
+    private fun renderProfiles() {
+        profBox.removeAllViews()
+        val names = TimerService.profileNames(prefs())
+        val active = prefs().getString("profile_active", "") ?: ""
+        if (names.isEmpty()) {
+            val t = TextView(this)
+            t.text = "Henüz profil yok."
+            t.setTextColor(DIM)
+            t.textSize = 12f
+            profBox.addView(t)
+        }
+        for (n in names) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.background = rounded(if (n == active) (ACCENT and 0x00FFFFFF) or 0x44000000 else INPUT, 12)
+            row.setPadding(dp(12), dp(6), dp(8), dp(6))
+            val t = TextView(this)
+            t.text = (if (n == active) "● " else "○ ") + n
+            t.textSize = 15f
+            t.setTextColor(if (n == active) ACCENT else Color.WHITE)
+            row.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val load = button("Yükle", false)
+            load.setOnClickListener {
+                TimerService.applyProfile(prefs(), n)
+                Toast.makeText(this, "Profil yüklendi: " + n, Toast.LENGTH_SHORT).show()
+                recreate()
+            }
+            row.addView(load, LinearLayout.LayoutParams(dp(84), ViewGroup.LayoutParams.WRAP_CONTENT))
+            val del = button("Sil", false)
+            del.setOnClickListener {
+                TimerService.deleteProfile(prefs(), n)
+                renderProfiles()
+            }
+            val dl = LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT)
+            dl.leftMargin = dp(6)
+            row.addView(del, dl)
+            profBox.addView(row, lp(dp(8)))
+        }
+    }
+
+    private fun sw(parent: LinearLayout, text: String, key: String, def: Boolean): Switch {
+        val s = Switch(this)
+        s.text = text
+        s.setTextColor(Color.WHITE)
+        s.textSize = 14f
+        s.isChecked = prefs().getBoolean(key, def)
+        parent.addView(s, lp(dp(4)))
+        return s
+    }
+
+    private fun lp(top: Int): LinearLayout.LayoutParams {
+        val l = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        l.topMargin = top
+        return l
+    }
+
+    /** Katlanır kart: başlığa dokununca açılır/kapanır, durum hatırlanır. Dönen düzene içerik eklenir. */
+    private fun card(parent: LinearLayout, heading: String): LinearLayout {
+        val c = LinearLayout(this)
+        c.orientation = LinearLayout.VERTICAL
+        c.background = TimerService_frame(CARD, 16)
+        c.setPadding(dp(18), dp(16), dp(18), dp(14))
+        val h = TextView(this)
+        h.textSize = 16f
+        h.letterSpacing = 0.05f
+        h.typeface = Typeface.SERIF
+        h.setTextColor(0xFFC9ADEB.toInt())
+        h.setPadding(0, dp(2), 0, dp(2))
+        val body = LinearLayout(this)
+        body.orientation = LinearLayout.VERTICAL
+        body.setPadding(0, dp(8), 0, dp(2))
+        val key = "card_open_" + heading
+        var open = prefs().getBoolean(key, heading == "Profiller")
+        fun apply() {
+            h.text = (if (open) "▾  " else "▸  ") + heading
+            body.visibility = if (open) android.view.View.VISIBLE else android.view.View.GONE
+        }
+        apply()
+        h.setOnClickListener {
+            open = !open
+            prefs().edit().putBoolean(key, open).apply()
+            apply()
+        }
+        c.addView(h)
+        c.addView(body)
+        parent.addView(c, lp(dp(10)))
+        return body
+    }
+
+    private fun TimerService_frame(color: Int, r: Int): android.graphics.drawable.Drawable =
+        GothicFrame(color, dp(r).toFloat(), resources.displayMetrics.density)
+
+    private fun button(text: String, primary: Boolean): Button {
+        val b = Button(this)
+        b.text = text
+        b.isAllCaps = false
+        b.textSize = 14f
+        b.typeface = Typeface.DEFAULT_BOLD
+        b.setTextColor(Color.WHITE)
+        val bg = GradientDrawable()
+        bg.cornerRadius = dp(12).toFloat()
+        bg.setColor(if (primary) 0xFF5B2A96.toInt() else INPUT)
+        bg.setStroke(dp(1), if (primary) ACCENT else 0xFF332D40.toInt())
+        b.background = bg
+        b.minHeight = dp(46)
+        b.minimumHeight = dp(46)
+        return b
+    }
+
+    private fun addField(parent: LinearLayout, f: Field) {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+
+        val left = LinearLayout(this)
+        left.orientation = LinearLayout.VERTICAL
+        val l = TextView(this)
+        l.text = f.label
+        l.textSize = 14f
+        l.setTextColor(Color.WHITE)
+        left.addView(l)
+        if (f.hint.isNotEmpty()) {
+            val hnt = TextView(this)
+            hnt.text = f.hint
+            hnt.textSize = 11f
+            hnt.setTextColor(DIM)
+            left.addView(hnt)
+        }
+        row.addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        val et = EditText(this)
+        et.inputType = if (f.text) {
+            InputType.TYPE_CLASS_TEXT
+        } else if (f.decimal) {
+            InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        } else {
+            InputType.TYPE_CLASS_NUMBER
+        }
+        et.setText(prefs().getString("cfg_" + f.key, f.def))
+        et.setTextColor(Color.WHITE)
+        et.textSize = 15f
+        et.gravity = Gravity.CENTER
+        et.background = rounded(INPUT, 10)
+        et.setPadding(dp(8), dp(8), dp(8), dp(8))
+        inputs[f.key] = et
+        val elp = LinearLayout.LayoutParams(dp(84), ViewGroup.LayoutParams.WRAP_CONTENT)
+        elp.leftMargin = dp(10)
+        row.addView(et, elp)
+
+        parent.addView(row, lp(dp(10)))
+    }
+
+    private fun prefs() = getSharedPreferences("w0wingen", Context.MODE_PRIVATE)
+}
